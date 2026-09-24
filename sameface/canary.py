@@ -34,7 +34,7 @@ def collect(backend, battery: list[Challenge], n: int, workers: int = 4, log=Non
 
     def one(job):
         c, i = job
-        raw = backend.sample(c.prompt)
+        raw = backend.sample(c.prompt, max_tokens=c.max_tokens)
         lab = c.canon(raw)
         return c, i, raw, (lab if c.multi else [lab])
 

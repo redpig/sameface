@@ -19,7 +19,7 @@ SYSTEM = "You are a helpful assistant. Follow the reply format exactly."
 
 class Backend(Protocol):
     name: str
-    def sample(self, prompt: str) -> str: ...
+    def sample(self, prompt: str, max_tokens: int | None = None) -> str: ...
 
 
 class AnthropicBackend:
@@ -32,9 +32,14 @@ class AnthropicBackend:
             raise RuntimeError("ANTHROPIC_API_KEY not set")
         self.temperature, self.max_tokens, self.system, self.retries = temperature, max_tokens, system, retries
 
-    def sample(self, prompt: str) -> str:
+    def sample(self, prompt: str, max_tokens: int | None = None) -> str:
+        data = self.sample_raw(prompt, max_tokens)
+        return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+
+    def sample_raw(self, prompt: str, max_tokens: int | None = None) -> dict:
+        """The full Messages API response (keeps stop_reason and usage)."""
         body = json.dumps({
-            "model": self.model, "max_tokens": self.max_tokens, "temperature": self.temperature,
+            "model": self.model, "max_tokens": max_tokens or self.max_tokens, "temperature": self.temperature,
             "system": self.system, "messages": [{"role": "user", "content": prompt}],
         }).encode()
         req = urllib.request.Request(
@@ -44,8 +49,7 @@ class AnthropicBackend:
         for attempt in range(self.retries):
             try:
                 with urllib.request.urlopen(req, timeout=60) as r:
-                    data = json.load(r)
-                return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+                    return json.load(r)
             except urllib.error.HTTPError as e:
                 if e.code in (429, 500, 502, 503, 529) and attempt < self.retries - 1:
                     time.sleep(2 ** attempt)
@@ -83,7 +87,7 @@ class MockBackend:
             return options[i]
         return self.rng.choice(options)
 
-    def sample(self, prompt: str) -> str:
+    def sample(self, prompt: str, max_tokens: int | None = None) -> str:
         p = prompt
         if p.startswith("Pick exactly one"):
             words = p.split(":")[1].split(".")[0].split(",")
@@ -110,11 +114,16 @@ class MockBackend:
             return (s[: len(s) // 2] + " — " + s[len(s) // 2 :]) if dash else s + "."
         if p.startswith("Write 100 random integers"):
             # habit: favours the 30-70 band and rarely repeats; injected context
-            # length nudges the band upward slightly (context sensitivity).
-            shift = min(20, self.ctx_words // 50)
+            # length nudges the band upward slightly (context sensitivity), and
+            # bias moves it too (an 'updated' model has different number habits).
+            # Each model (bias) also has a few favourite numbers.
+            shift = min(20, self.ctx_words // 50) + int(round(30 * self.bias))
+            favs = random.Random(f"favs:{self.bias:.2f}").sample(range(1, 101), 5)
             out, seen = [], set()
             for _ in range(100):
                 n = int(self.rng.triangular(1, 100, 50 + shift))
+                if self.rng.random() < 0.15:
+                    n = self.rng.choice(favs)
                 if n in seen and self.rng.random() < 0.8:
                     n = self.rng.randint(1, 100)
                 seen.add(n); out.append(n)

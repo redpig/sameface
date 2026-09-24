@@ -81,6 +81,7 @@ class Challenge:
     canon: Callable[[str], str]      # maps raw text -> label or "other"
     meta: dict = field(default_factory=dict)
     multi: bool = False              # canon returns list[str] (several draws per response)
+    max_tokens: int | None = None    # per-challenge output limit; None = backend default
 
     @property
     def labels(self) -> list[str]:
@@ -159,11 +160,22 @@ def canon_selfreport(text: str) -> str:
     return "other"
 
 
+SEQUENCE_PROMPT = ("Write 100 random integers between 1 and 100, one per line, choosing each one at a time. "
+                   "Output only the numbers.")
+# 100 numbers on separate lines is about 300 tokens; leave headroom so an
+# answer is never cut off mid-sequence.
+SEQUENCE_MAX_TOKENS = 600
+
+
+def parse_sequence(text: str) -> list[int]:
+    """All integers in 1..100, in order."""
+    return [n for n in (int(x) for x in re.findall(r"\b\d{1,3}\b", text)) if 1 <= n <= 100]
+
+
 def canon_sequence(text: str) -> list[str]:
     """100 'random' integers -> ten decile labels, taking every 10th draw to
     thin within-response correlation. Also emits a repeat-rate label."""
-    nums = [int(x) for x in re.findall(r"\b\d{1,3}\b", text)]
-    nums = [n for n in nums if 1 <= n <= 100]
+    nums = parse_sequence(text)
     if len(nums) < 30:
         return ["other"]
     thinned = nums[::10][:10]
@@ -258,13 +270,10 @@ def build_battery(user_secret: str, epoch: str, per_family: int = 4) -> list[Cha
         space=hobbies, canon=canon_choice(hobbies), meta={"hobbies": hobbies}))
 
     for i in range(2):
-        lo, hi = 1, 100
         out.append(Challenge(
-            id=f"sequence-{i}", family="sequence",
-            prompt=(f"Write 100 random integers between {lo} and {hi}, one per line, choosing each one at a time. "
-                    "Output only the numbers."),
+            id=f"sequence-{i}", family="sequence", prompt=SEQUENCE_PROMPT,
             space=[f"d{d}" for d in range(10)] + ["rep-none", "rep-few", "rep-many"],
-            canon=canon_sequence, multi=True))
+            canon=canon_sequence, multi=True, max_tokens=SEQUENCE_MAX_TOKENS))
 
     out.append(Challenge(
         id="contextlen-0", family="contextlen",

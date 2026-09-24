@@ -152,6 +152,53 @@ Measured on the mock at N = 20: 0 false positives in 30 same-model reruns.
 A bias shift of 0.15 was detected in 10 of 10 runs; 0.10 in 1 of 10; 0.05 in
 0 of 10. These numbers describe the test, not a real model.
 
+## Sequence identification
+
+The sequence task can do more than a count test. `sameface.seqid` fits a
+next-number model to an endpoint's raw answers (enrollment) and scores new
+numbers by likelihood (identification). This follows the original
+disclosure, which enrolled a person from about 300 random numbers.
+
+```bash
+python -m sameface.seqid collect --model claude-sonnet-5 --answers 10 --out seqdata/sonnet.jsonl
+python -m sameface.seqid collect --model claude-haiku-4-5-20251001 --answers 10 --out seqdata/haiku.jsonl
+python -m sameface.seqid compare seqdata/*.jsonl          # which model type needs the fewest numbers
+python -m sameface.seqid fingerprint seqdata/sonnet.jsonl # the endpoint's number habits
+python -m sameface.seqid identify seqdata/*.jsonl --sample new.jsonl
+```
+
+All answers use the same prompt (`SEQUENCE_PROMPT`) at temperature 1.0,
+with `max_tokens` 600 so a 100-number answer is not cut off.
+
+Three model types, all over n in 1..100 given the numbers already written in
+the same answer:
+
+| Model | What it learns |
+| --- | --- |
+| `feature` | Log-linear (maximum-entropy) model. Features: the number itself, digit patterns (round, repeated digits, last digit), jump from the previous number, same range of 10 or last digit as the previous number, reversed digits, already seen and how recently, how full the number's range of 10 is, first and early positions. L2-penalized, fitted with L-BFGS. The weights are a readable fingerprint. |
+| `markov` | First-order chain on the raw numbers, smoothed toward each number's frequency. The original disclosure's model. |
+| `ppm` | Variable-order context model (Witten-Bell escapes, interpolated). |
+
+Scoring is the per-number log-likelihood ratio of the enrolled model against
+a reference: uniform, or a model pooled from the other enrolled endpoints.
+
+- Same or different: `enroll` sets the threshold from held-out baseline
+  answers (fit on the other folds, score the held-out fold) rather than
+  assuming the numbers in one answer are independent.
+- Sequential: `sprt` adds up the ratio number by number and stops when it
+  crosses a bound, so the result says how many numbers it needed.
+- Identification: the enrolled model under which the sample is most likely.
+  `identify_sequential` stops when the leader is ahead by a factor of 100.
+
+`compare` cross-validates by answer. For each fold it enrolls every endpoint
+on its training answers, tunes the Markov and PPM smoothing on those answers
+only, and scores the held-out answers at 5 to 200 numbers. It reports
+identification accuracy, false reject and false accept rates, the equal
+error rate, and the sequential tests' numbers-to-decision.
+
+Use the mock only for tests. Its number habits are whatever the code says,
+so a comparison on the mock rediscovers them.
+
 ## Files
 
 | File | Role |
@@ -160,7 +207,9 @@ A bias shift of 0.15 was detected in 10 of 10 runs; 0.10 in 1 of 10; 0.05 in
 | `sameface/stats.py` | G-test, JSD, Benjamini–Hochberg, Fisher, verdict |
 | `sameface/backend.py` | `AnthropicBackend` (urllib) and `MockBackend` |
 | `sameface/canary.py` | CLI: `baseline`, `run`, `demo` |
-| `test_sameface.py` | Four tests. Run with `python -m pytest` or directly. |
+| `sameface/seqmodel.py` | Sequence models, likelihood-ratio scoring, enrollment, sequential test, identification |
+| `sameface/seqid.py` | CLI: `collect`, `compare`, `fingerprint`, `identify` |
+| `test_sameface.py` | Tests. Run with `python test_sameface.py` (or `python -m pytest`). |
 
 ## Add a surface
 
